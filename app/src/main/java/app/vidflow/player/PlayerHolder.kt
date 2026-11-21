@@ -211,12 +211,13 @@ object PlayerHolder {
         chapters.value = emptyList()
         captions.value = emptyList()
         try {
-            val audios = streamInfo.audioStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
+            // Same streaming method as videos (a small DASH description around the audio file),
+            // which YouTube serves reliably; plain downloads of the file often get cut off.
+            val audios = streamInfo.audioStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.itagItem != null }
             val audio = audios.filter { it.format == MediaFormat.M4A }.maxByOrNull { it.averageBitrate }
                 ?: audios.maxByOrNull { it.averageBitrate }
-            val source = if (audio != null) {
-                androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(cached)
-                    .createMediaSource(mediaItem(audio.content, video, streamInfo))
+            val source = if (audio != null && streamInfo.duration > 0) {
+                dash(audio.content, audio.itagItem!!, streamInfo.duration, cached, video, streamInfo)
             } else {
                 buildSource(video, streamInfo, 144).first
             }
