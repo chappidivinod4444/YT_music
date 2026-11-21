@@ -225,6 +225,11 @@ object GoogleAccount {
         }
     }
 
+    /** Likes (or un-likes with "none") a video on your YouTube account. Blocking. */
+    fun rate(videoId: String, rating: String) {
+        send("videos/rate?id=$videoId&rating=$rating", null)
+    }
+
     /** One of your playlists on YouTube. */
     data class AccountList(val id: String, val title: String, val thumbnail: String?, val count: Long, val privacy: String)
 

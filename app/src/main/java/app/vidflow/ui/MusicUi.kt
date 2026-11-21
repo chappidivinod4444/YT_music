@@ -47,6 +47,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -339,6 +342,7 @@ private fun SongMenu(v: Video, nav: MNav) {
     var save by remember { mutableStateOf(false) }
     var download by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val like = rememberLiker()
     IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "More", modifier = Modifier.size(20.dp)) }
     if (save) SaveToPlaylistDialog(v) { save = false }
     if (download) DownloadDialog(v, emptyList()) { download = false }
@@ -356,7 +360,7 @@ private fun SongMenu(v: Video, nav: MNav) {
             SheetItem(Icons.Outlined.PlaylistPlay, "Play next") { open = false; MusicQueue.playNext(v) }
             SheetItem(Icons.Outlined.QueueMusic, "Add to queue") { open = false; MusicQueue.addToQueue(v) }
             SheetItem(Icons.Outlined.ThumbUp, if (Saved.liked.value.any { it.url == v.url }) "Remove from liked songs" else "Add to liked songs") {
-                open = false; Saved.toggleLike(v)
+                open = false; like(v)
             }
             SheetItem(Icons.Outlined.PlaylistAdd, "Save to playlist") { open = false; save = true }
             SheetItem(Icons.Outlined.FileDownload, "Download") { open = false; download = true }
@@ -473,6 +477,24 @@ private fun HomePage(nav: MNav, explore: Boolean) {
     var shelves by remember(key) { mutableStateOf(HomeMemory.shelves[key]) }
     var error by remember(key) { mutableStateOf<String?>(null) }
     var reload by remember { mutableStateOf(0) }
+    // Signed in: use your liked music to shape Home (fetched quietly once per app start).
+    val signedIn by GoogleAccount.signedIn.collectAsState()
+    val tokens = rememberTokenRunner { }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(signedIn) {
+        if (!signedIn || Music.accountLiked.isNotEmpty() || explore) return@LaunchedEffect
+        tokens.run {
+            scope.launch {
+                runCatching { withContext(Dispatchers.IO) { GoogleAccount.liked() } }.onSuccess {
+                    if (it.isNotEmpty()) {
+                        Music.accountLiked = it
+                        HomeMemory.shelves.clear()
+                        reload++
+                    }
+                }
+            }
+        }
+    }
     LaunchedEffect(key, reload) {
         if (shelves != null && reload == 0) return@LaunchedEffect
         error = null
@@ -823,6 +845,7 @@ private fun LibraryPage(nav: MNav) {
     val recent by MusicHistory.list.collectAsState()
     val local by Saved.playlists.collectAsState()
     val signedIn by GoogleAccount.signedIn.collectAsState()
+    val artists by app.vidflow.core.Library.subscriptions.collectAsState()
     var account by remember { mutableStateOf(PlaylistCache.lists) }
     var error by remember { mutableStateOf<String?>(null) }
     val tokens = rememberTokenRunner { error = it }
@@ -834,6 +857,8 @@ private fun LibraryPage(nav: MNav) {
                 runCatching { withContext(Dispatchers.IO) { GoogleAccount.myPlaylists() } }
                     .onSuccess { account = it; PlaylistCache.lists = it }
                     .onFailure { error = (it as? GoogleAccount.ApiException)?.message ?: friendlyError(it) }
+                // Your liked music personalises Home.
+                runCatching { withContext(Dispatchers.IO) { GoogleAccount.liked() } }.onSuccess { Music.accountLiked = it }
             }
         }
     }
@@ -847,7 +872,7 @@ private fun LibraryPage(nav: MNav) {
         }
         item { Spacer(Modifier.height(12.dp)) }
         item { LibTile(liked.firstOrNull()?.thumbnail, "Liked songs", "Auto playlist • ${liked.size} songs", Icons.Filled.ThumbUp) { nav.open(Page.Liked) } }
-        if (signedIn) item { LibTile(null, "Liked on YouTube", "From your Google account", Icons.Filled.ThumbUp) { nav.open(Page.AccountList("LL", "Liked on YouTube")) } }
+        if (signedIn) item { LibTile(null, "Liked music", "From your Google account", Icons.Filled.ThumbUp) { nav.open(Page.AccountList("LL", "Liked music")) } }
         items(local.filter { it.id != Saved.SAVED_SHORTS }, key = { "l" + it.id }) { p ->
             LibTile(p.videos.firstOrNull()?.thumbnail, p.name, "Playlist • ${p.videos.size} songs • in this app", null) { nav.open(Page.Local(p.id)) }
         }
@@ -859,6 +884,19 @@ private fun LibraryPage(nav: MNav) {
                 "Sign in with Google (tap your picture at the top) to see your YouTube playlists here.",
                 color = Sub, fontSize = 13.sp, modifier = Modifier.padding(20.dp),
             )
+        }
+        if (artists.isNotEmpty()) {
+            item { ShelfTitle("Artists") }
+            item {
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    items(artists, key = { "ar" + it.url }) { a ->
+                        Column(Modifier.width(110.dp).clickable { nav.open(Page.Artist(a.url)) }, horizontalAlignment = Alignment.CenterHorizontally) {
+                            AsyncImage(a.avatar, null, contentScale = ContentScale.Crop, modifier = Modifier.size(110.dp).clip(CircleShape).background(Chip))
+                            Text(artistName(a.name), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
+                        }
+                    }
+                }
+            }
         }
         error?.let { e -> item { Text(e, color = Color(0xFFFF8A80), fontSize = 13.sp, modifier = Modifier.padding(20.dp)) } }
     }
@@ -879,19 +917,114 @@ private fun LibTile(thumb: String?, title: String, subtitle: String, icon: Image
     }
 }
 
+/** Account page: sign in with Google, switch or add accounts, sign out, import, settings. */
 @Composable
 private fun MusicSettings(nav: MNav) {
     val context = LocalContext.current
-    val vnav = remember { Nav(video = {}, channel = {}, playlist = {}, search = {}, back = nav.back) }
+    val scope = rememberCoroutineScope()
+    val signedIn by GoogleAccount.signedIn.collectAsState()
+    val name by GoogleAccount.name.collectAsState()
+    val avatar by GoogleAccount.avatar.collectAsState()
+    val email by GoogleAccount.email.collectAsState()
+    val handle by GoogleAccount.handle.collectAsState()
+    val accounts by GoogleAccount.accounts.collectAsState()
+    var message by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val actions = rememberAccountActions { message = it }
+    val tokens = rememberTokenRunner { message = it }
+    val needsSetup = message?.contains("isn't set up yet") == true
+
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
-        item { TopBar(nav, "Account & settings", back = true) }
-        item {
-            AccountSection(vnav, openLiked = { nav.open(Page.AccountList("LL", "Liked on YouTube")) }, openPlaylists = { nav.open(Page.Library) }) {
-                android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show()
+        item { TopBar(nav, "Account", back = true) }
+        if (signedIn) {
+            item {
+                Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Avatar(avatar, 84)
+                    Text(name ?: "Google account", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+                    Text(listOfNotNull(handle, email).joinToString(" • "), color = Sub, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
+        } else {
+            item {
+                Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Outlined.AccountCircle, null, modifier = Modifier.size(84.dp), tint = Sub)
+                    Text("Sign in with Google", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+                    Text(
+                        "Optional. See your YouTube playlists and liked music, save songs to your playlists, " +
+                            "sync likes, and get a Home made from what you like.",
+                        color = Sub, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Text(
+                        "Sign in", color = Color.Black, fontWeight = FontWeight.SemiBold, fontSize = 16.sp,
+                        modifier = Modifier.padding(top = 18.dp).clip(RoundedCornerShape(22.dp)).background(Color.White)
+                            .clickable { message = null; actions.signIn(null) }.padding(horizontal = 36.dp, vertical = 11.dp),
+                    )
+                }
             }
         }
+        message?.let { m ->
+            item {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp).clip(RoundedCornerShape(10.dp)).background(Color(0x1AFFFFFF)).padding(14.dp)) {
+                    Text(m, fontSize = 14.sp)
+                    if (needsSetup) Text(
+                        "This app is new to your Google Cloud project: add an Android sign-in for it (package app.vidflow.music). Open the guide",
+                        color = Color(0xFF3EA6FF), fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 8.dp).clickable { nav.open(Page.Setup) },
+                    )
+                }
+            }
+        }
+
+        // Accounts on this phone: switch, add, use without one.
+        if (accounts.isNotEmpty() || signedIn) {
+            item { SectionLabel("Accounts") }
+            items(accounts, key = { "acc" + it.email }) { a ->
+                val active = signedIn && a.email == email
+                Row(
+                    Modifier.fillMaxWidth().clickable(enabled = !active) { message = null; actions.signIn(a.email) }.padding(horizontal = 20.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Avatar(a.avatar, 40)
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(a.name, fontSize = 16.sp, maxLines = 1)
+                        Text(listOfNotNull(a.handle, a.email).joinToString(" • "), color = Sub, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (active) Icon(Icons.Filled.Check, "Signed in")
+                }
+            }
+            item { AccountLine(Icons.Outlined.PersonAdd, "Add account") { message = null; actions.addAccount() } }
+            if (signedIn) item { AccountLine(Icons.Outlined.Logout, "Use without an account") { actions.signOut(); message = "Signed out. Your songs and playlists in this app stay." } }
+        }
+
+        if (signedIn) {
+            item { SectionLabel("Your YouTube") }
+            item { AccountLine(Icons.Filled.ThumbUp, "Liked music") { nav.open(Page.AccountList("LL", "Liked music")) } }
+            item { AccountLine(Icons.Outlined.LibraryMusic, "Your playlists") { nav.open(Page.Library) } }
+            item {
+                AccountLine(Icons.Outlined.PersonAdd, if (busy) "Importing artists…" else "Import subscribed artists") {
+                    if (busy) return@AccountLine
+                    busy = true
+                    tokens.run {
+                        scope.launch {
+                            message = try {
+                                val n = withContext(Dispatchers.IO) { GoogleAccount.importSubscriptions() }
+                                "Added $n channels to your artists."
+                            } catch (t: Throwable) {
+                                (t as? GoogleAccount.ApiException)?.message ?: friendlyError(t)
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        item { SectionLabel("Settings") }
         item { SettingLine("Google sign-in setup guide") { nav.open(Page.Setup) } }
-        item { SettingLine("Clear recently played") { MusicHistory.clear() } }
+        item { SettingLine("Clear recently played") { MusicHistory.clear(); message = "Recently played cleared." } }
         item {
             val version = remember {
                 runCatching {
@@ -900,6 +1033,42 @@ private fun MusicSettings(nav: MNav) {
             }
             Text("Vidflow Music $version", color = Sub, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(24.dp),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(text, fontSize = 13.sp, color = Sub, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 6.dp))
+}
+
+@Composable
+private fun AccountLine(icon: ImageVector, text: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(20.dp))
+        Text(text, fontSize = 16.sp)
+    }
+}
+
+/**
+ * Like / unlike a song. Always kept in the app; when you're signed in it's also
+ * liked on your YouTube account, so it shows up in YouTube Music too.
+ */
+@Composable
+private fun rememberLiker(): (Video) -> Unit {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val tokens = rememberTokenRunner { android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show() }
+    return { v ->
+        val nowLiked = Saved.liked.value.none { it.url == v.url }
+        Saved.toggleLike(v)
+        val id = Yt.videoId(v.url)
+        if (GoogleAccount.signedIn.value && id != null) tokens.run {
+            scope.launch {
+                runCatching { withContext(Dispatchers.IO) { GoogleAccount.rate(id, if (nowLiked) "like" else "none") } }
+                    .onFailure { android.widget.Toast.makeText(context, (it as? GoogleAccount.ApiException)?.message ?: friendlyError(it), android.widget.Toast.LENGTH_SHORT).show() }
+            }
         }
     }
 }
@@ -986,6 +1155,7 @@ private fun NowPlaying(nav: MNav, onClose: () -> Unit) {
     val (pos, dur) = rememberProgress()
     var dragging by remember { mutableStateOf<Float?>(null) }
     var sheet by remember { mutableStateOf<String?>(null) }
+    val like = rememberLiker()
     val song = v ?: return
     val isLiked = liked.any { it.url == song.url }
 
@@ -1032,7 +1202,7 @@ private fun NowPlaying(nav: MNav, onClose: () -> Unit) {
                         modifier = Modifier.clickable(enabled = song.channelUrl != null) { song.channelUrl?.let { onClose(); nav.open(Page.Artist(it)) } },
                     )
                 }
-                IconButton(onClick = { Saved.toggleLike(song) }) {
+                IconButton(onClick = { like(song) }) {
                     Icon(if (isLiked) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp, "Like", modifier = Modifier.size(26.dp))
                 }
             }

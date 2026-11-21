@@ -28,6 +28,10 @@ object Music {
     const val PLAYLISTS = "music_playlists"
     const val ARTISTS = "music_artists"
 
+    /** Songs you liked on your Google account (filled after sign-in); used to personalise Home. */
+    @Volatile
+    var accountLiked: List<Video> = emptyList()
+
     val moods = listOf("Relax", "Energize", "Workout", "Commute", "Focus", "Party", "Romance", "Sad", "Sleep", "Feel good")
 
     fun songs(query: String): List<Video> =
@@ -65,7 +69,7 @@ object Music {
                 )
             }
             val quick = pool.submit<List<Video>> {
-                val seeds = recent.take(3)
+                val seeds = recent.take(3).ifEmpty { accountLiked.shuffled().take(3) }
                 val fromSeeds = seeds.flatMap { related(it).take(12) }
                 (fromSeeds.shuffled() + if (fromSeeds.size < 12) songs("top songs ${local.firstOrNull().orEmpty()}") else emptyList())
                     .distinctBy { it.url }.filter { s -> recent.none { it.url == s.url } }.take(20)
@@ -84,6 +88,7 @@ object Music {
             return buildList {
                 quick.get().takeIf { it.isNotEmpty() }?.let { add(Shelf("Quick picks", it, Shelf.Style.QuickPicks, "Start radio from a song")) }
                 if (recent.isNotEmpty()) add(Shelf("Listen again", recent.take(16), Shelf.Style.Squares))
+                if (accountLiked.isNotEmpty()) add(Shelf("From your likes", accountLiked.take(20), Shelf.Style.Squares, "Your Google account"))
                 mixes.get().takeIf { it.isNotEmpty() }?.let { add(Shelf("Mixed for you", it, Shelf.Style.Squares)) }
                 trending.get().takeIf { it.isNotEmpty() }?.let { add(Shelf("Trending songs", it, Shelf.Style.QuickPicks)) }
                 albums.get().takeIf { it.isNotEmpty() }?.let { add(Shelf("Albums for you", it, Shelf.Style.Squares)) }
