@@ -449,7 +449,7 @@ private fun LoadingBox() {
 }
 
 @Composable
-private fun ErrorBox(text: String, retry: () -> Unit) {
+private fun MErrorBox(text: String, retry: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text, color = Sub)
         Text(
@@ -490,7 +490,7 @@ private fun HomePage(nav: MNav, explore: Boolean) {
         val s = shelves
         when {
             s != null -> s.forEach { shelf -> item(key = shelf.title) { ShelfView(shelf, nav) } }
-            error != null -> item { ErrorBox(error!!) { reload++ } }
+            error != null -> item { MErrorBox(error!!) { reload++ } }
             else -> item { LoadingBox() }
         }
     }
@@ -577,7 +577,7 @@ private fun SearchPage(nav: MNav) {
             }
             LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                 if (loading) item { LoadingBox() }
-                error?.let { e -> item { ErrorBox(e) { retry++ } } }
+                error?.let { e -> item { MErrorBox(e) { retry++ } } }
                 items(results, key = { it.url }) { item ->
                     when (item) {
                         is Video -> SongRow(item, results, nav)
@@ -673,7 +673,7 @@ private fun AlbumPage(url: String, title: String?, nav: MNav) {
         item { TopBar(nav, "", back = true) }
         val p = page
         if (p == null) {
-            item { if (error != null) ErrorBox(error!!) { retry++ } else LoadingBox() }
+            item { if (error != null) MErrorBox(error!!) { retry++ } else LoadingBox() }
         } else {
             item {
                 val album = url.contains("OLAK")
@@ -737,7 +737,7 @@ private fun ArtistPage(url: String, nav: MNav) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         if (p == null) {
             item { TopBar(nav, "", back = true) }
-            item { if (error != null) ErrorBox(error!!) { retry++ } else LoadingBox() }
+            item { if (error != null) MErrorBox(error!!) { retry++ } else LoadingBox() }
             return@LazyColumn
         }
         item {

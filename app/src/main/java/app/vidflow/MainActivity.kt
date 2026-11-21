@@ -3,6 +3,7 @@ package app.vidflow
 import android.app.Application
 import android.content.Intent
 import android.os.Bundle
+import coil3.request.crossfade
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
